@@ -45,6 +45,7 @@ class PrintSession:
     alerts: int = 0
     total_input_tokens: int = 0
     total_output_tokens: int = 0
+    writable: bool = True
     _saved_frames: int = field(default=0, repr=False)
 
     @classmethod
@@ -53,8 +54,23 @@ class PrintSession:
     ) -> PrintSession:
         stamp = started_at.strftime("%Y-%m-%d_%H%M%S")
         directory = settings.sessions_dir / f"{stamp}_{_slug(file_name)}"
-        directory.mkdir(parents=True, exist_ok=True)
-        (directory / "frames").mkdir(exist_ok=True)
+
+        # A session that cannot be written to disk must not stop the service.
+        # Detection and alerting are the product; the recording is a bonus, so
+        # an unwritable directory degrades to an in-memory session that still
+        # counts checks and carries an id for cooldown fingerprinting.
+        writable = True
+        try:
+            directory.mkdir(parents=True, exist_ok=True)
+            (directory / "frames").mkdir(exist_ok=True)
+        except OSError as exc:
+            writable = False
+            logger.error(
+                "cannot write session directory %s (%s); continuing without "
+                "saving frames or detections. On Linux a bind-mounted data "
+                "directory must be writable by the container's user.",
+                directory, exc,
+            )
 
         session = cls(
             id=str(uuid.uuid4()),
@@ -62,11 +78,14 @@ class PrintSession:
             started_at=started_at,
             file_name=file_name,
             settings=settings,
+            writable=writable,
         )
         session._write_metadata(final_state=None, ended_at=None)
         return session
 
     def save_frame(self, frame: ImageFrame) -> Path | None:
+        if not self.writable:
+            return None
         if not self.settings.save_frames:
             return None
         if self._saved_frames >= self.settings.max_session_frames:
@@ -91,6 +110,9 @@ class PrintSession:
         self.total_output_tokens += result.output_tokens
         if decision.alert:
             self.alerts += 1
+
+        if not self.writable:
+            return
 
         row = {
             "timestamp": datetime.now(UTC).isoformat(),
@@ -119,6 +141,8 @@ class PrintSession:
         self._write_metadata(final_state=final_state, ended_at=datetime.now(UTC))
 
     def _write_metadata(self, final_state: str | None, ended_at: datetime | None) -> None:
+        if not self.writable:
+            return
         meta = {
             "id": self.id,
             "file_name": self.file_name,

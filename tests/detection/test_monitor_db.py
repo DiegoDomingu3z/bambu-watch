@@ -658,3 +658,63 @@ async def test_undecodable_frame_does_not_break_recording(tmp_path):
     row = repo.get(print_id)
     assert row["outcome"] == OUTCOME_COMPLETED, "the print must still be recorded"
     assert row["api_cost"] is not None
+
+
+async def test_monitor_survives_an_unwritable_data_directory(tmp_path):
+    """The exact production failure: on Linux the bind-mounted data directory
+    is not writable by the container's user, mkdir raises, and before the fix
+    the traceback propagated out of run_forever and killed the service."""
+    blocked = tmp_path / "data"
+    (blocked / "sessions").mkdir(parents=True)
+    settings = make_settings(blocked)
+    repo = PrintRepository(connect(settings.db_path), settings)
+    (blocked / "sessions").chmod(0o500)
+
+    try:
+        state = running()
+        notifier = FullNotifier()
+        monitor = PrintMonitor(settings, StubPrinter(state), StubCamera(),
+                               AlertingAnalyzer(), notifier, repository=repo)
+
+        # Monitoring, analysis and alerting must all keep working.
+        for _ in range(4):
+            outcome = await monitor.run_once()
+            assert outcome != "idle"
+        assert monitor.session is not None
+        assert monitor.session.writable is False
+        assert notifier.failures, "alerts are the product; they must still fire"
+
+        state.apply_report({"gcode_state": "FINISH", "mc_percent": 100,
+                            "layer_num": 100})
+        assert await monitor.run_once() == "idle"
+        assert notifier.finished, "the finish notification must still be sent"
+    finally:
+        (blocked / "sessions").chmod(0o700)
+
+
+async def test_unwritable_directory_still_records_to_the_database(tmp_path):
+    """The database lives beside sessions/, not inside it, so history still
+    works when only the session directory is unwritable."""
+    blocked = tmp_path / "data"
+    (blocked / "sessions").mkdir(parents=True)
+    settings = make_settings(blocked)
+    repo = PrintRepository(connect(settings.db_path), settings)
+    (blocked / "sessions").chmod(0o500)
+
+    try:
+        state = running()
+        monitor = PrintMonitor(settings, StubPrinter(state), StubCamera(),
+                               StubAnalyzer(), StubNotifier(), repository=repo)
+        for _ in range(4):
+            await monitor.run_once()
+        print_id = monitor.session.id
+        state.apply_report({"gcode_state": "FINISH", "mc_percent": 100,
+                            "layer_num": 100})
+        await monitor.run_once()
+
+        row = repo.get(print_id)
+        assert row["outcome"] == OUTCOME_COMPLETED
+        assert row["checks"] > 0, "check counts must survive"
+        assert row["api_cost"] is not None
+    finally:
+        (blocked / "sessions").chmod(0o700)

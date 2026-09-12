@@ -5,6 +5,10 @@ services:
     restart: unless-stopped
     env_file:
       - .env
+    # Linux bind mounts preserve host UIDs, so the container must run as a
+    # user that can write ./data. Defaults to 1000, the usual first-user id.
+    # Override with PUID/PGID in .env if `id -u` says otherwise.
+    user: "${PUID:-1000}:${PGID:-1000}"
     volumes:
       - ./data:/app/data
     # No ports published. The service makes only outbound connections:

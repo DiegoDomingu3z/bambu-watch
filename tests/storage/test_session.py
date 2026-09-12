@@ -120,3 +120,42 @@ def test_close_writes_totals(tmp_path):
     assert meta["total_output_tokens"] == 280
     assert meta["ended_at"] is not None
     assert meta["vision_model"] == "claude-sonnet-5"
+
+
+# --- an unwritable data directory must not stop the service ---
+
+def test_create_survives_an_unwritable_data_directory(tmp_path):
+    """Reproduces the Linux bind-mount failure: the container's user cannot
+    write the host directory, so mkdir raises. The service must continue."""
+    blocked = tmp_path / "data"
+    (blocked / "sessions").mkdir(parents=True)
+    (blocked / "sessions").chmod(0o500)  # readable, not writable
+    try:
+        s = PrintSession.create(make_settings(blocked), "x", STARTED)
+        assert s.writable is False
+        assert s.id, "an id is still needed for cooldown fingerprinting"
+    finally:
+        (blocked / "sessions").chmod(0o700)
+
+
+def test_unwritable_session_still_counts_checks(tmp_path):
+    blocked = tmp_path / "data"
+    (blocked / "sessions").mkdir(parents=True)
+    (blocked / "sessions").chmod(0o500)
+    try:
+        s = PrintSession.create(make_settings(blocked), "x", STARTED)
+        d = Decision(alert=True, next_interval=45, reason="confirmed")
+        s.record(a_result(), d, None)
+        s.record(a_result(), d, None)
+        assert s.checks == 2, "totals must stay honest even with no disk"
+        assert s.alerts == 2
+        assert s.total_input_tokens == 3100
+        assert s.save_frame(a_frame()) is None
+        s.close("FINISH")  # must not raise
+    finally:
+        (blocked / "sessions").chmod(0o700)
+
+
+def test_writable_session_reports_writable(tmp_path):
+    s = PrintSession.create(make_settings(tmp_path), "x", STARTED)
+    assert s.writable is True
