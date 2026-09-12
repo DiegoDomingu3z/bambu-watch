@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
+
+from app.bambu.ams import AmsSlot, parse_ams
 
 RUNNING = "RUNNING"
 PAUSE = "PAUSE"
@@ -30,6 +32,7 @@ class PrinterState:
     total_layers: int | None = None
     remaining_minutes: int | None = None
     file_name: str | None = None
+    ams_slots: list[AmsSlot] = field(default_factory=list)
 
     def apply_report(self, print_data: dict) -> None:
         """Merge one MQTT `print` object. Reports are incremental, so only
@@ -45,6 +48,13 @@ class PrinterState:
             self.total_layers = _as_int(print_data["total_layer_num"])
         if "mc_remaining_time" in print_data:
             self.remaining_minutes = _as_int(print_data["mc_remaining_time"])
+
+        # Only replace slots when the report actually carries an AMS block;
+        # reports are incremental.
+        if "ams" in print_data or "vt_tray" in print_data:
+            parsed = parse_ams(print_data)
+            if parsed:
+                self.ams_slots = parsed
 
         # subtask_name is the human-readable print name. gcode_file reads as
         # "Metadata/plate_1.gcode" and is only a fallback.
