@@ -320,3 +320,61 @@ async def test_history_failure_does_not_end_the_session(tmp_path):
     assert await monitor.run_once() == "idle", (
         "a database failure must never end monitoring"
     )
+
+
+# --- material in alerts ---
+
+class RecordingNotifier:
+    def __init__(self):
+        self.materials = []
+
+    async def send_failure(self, analysis, frame, state, material=None):
+        self.materials.append(material)
+        return True
+
+
+class AlertingAnalyzer:
+    async def analyze(self, frames, state, interval):
+        from app.vision.schemas import FailureAnalysis
+        return AnalysisResult(
+            analysis=FailureAnalysis(status="failure", confidence=0.93,
+                                     failure_type="spaghetti", severity="high",
+                                     explanation="e"),
+            input_tokens=100, output_tokens=20, model="claude-sonnet-5")
+
+
+async def test_alert_carries_estimated_material(tmp_path):
+    settings = make_settings(tmp_path)
+    state = preparing()
+    repo = PrintRepository(connect(settings.db_path), settings)
+    notifier = RecordingNotifier()
+    monitor = PrintMonitor(settings, StubPrinter(state), StubCamera(),
+                           AlertingAnalyzer(), notifier,
+                           repository=repo, ftp=StubFtp(slice_info()))
+    await settle(monitor, 2)
+    state.apply_report({"gcode_state": "RUNNING", "mc_percent": 50,
+                        "layer_num": 50, "total_layer_num": 100})
+    for _ in range(5):
+        await monitor.run_once()
+
+    assert notifier.materials, "an alert should have fired"
+    summary = notifier.materials[0]
+    assert summary is not None
+    assert summary.planned_grams == pytest.approx(340.0)
+    assert summary.consumed_grams == pytest.approx(170.0)
+    assert summary.consumed_cost == pytest.approx(2.21)
+    assert summary.estimated is True, "layer fraction is an estimate"
+
+
+async def test_alert_omits_material_without_slice_info(tmp_path):
+    settings = make_settings(tmp_path)
+    state = running()
+    repo = PrintRepository(connect(settings.db_path), settings)
+    notifier = RecordingNotifier()
+    monitor = PrintMonitor(settings, StubPrinter(state), StubCamera(),
+                           AlertingAnalyzer(), notifier,
+                           repository=repo, ftp=StubFtp(fail=True))
+    for _ in range(5):
+        await monitor.run_once()
+    assert notifier.materials
+    assert notifier.materials[0] is None, "no figures means no material line"

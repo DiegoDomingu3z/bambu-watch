@@ -16,7 +16,9 @@ from app.bambu.slice_info import SliceInfo
 from app.config import Settings
 from app.detection.confirmation import FailureDetector
 from app.detection.history import SnapshotBuffer
+from app.notifications.discord import MaterialSummary
 from app.storage.prints import FilamentRow
+from app.storage.records import METHOD_LAYER_FRACTION, OUTCOME_STOPPED, compute_consumption
 from app.storage.session import PrintSession
 
 logger = logging.getLogger(__name__)
@@ -123,7 +125,9 @@ class PrintMonitor:
 
         logger.warning("ALERT: %s", decision.reason)
         try:
-            await self.notifier.send_failure(decision.analysis, frame, state)
+            await self.notifier.send_failure(
+                decision.analysis, frame, state, self._material_summary(state)
+            )
         except Exception as exc:
             # The detection is already recorded; a delivery failure must not
             # end the session.
@@ -270,6 +274,28 @@ class PrintMonitor:
         except Exception as exc:
             # History is valuable but never worth ending a session over.
             logger.error("could not record print history: %s", exc)
+
+    def _material_summary(self, state: PrinterState) -> MaterialSummary | None:
+        """What the print would have consumed if abandoned now. This is the
+        figure that makes an alert actionable: not how far along the print is,
+        but what walking away costs."""
+        info = self.slice_info
+        if info is None or info.total_grams is None:
+            return None
+
+        grams, method = compute_consumption(
+            info.total_grams, state.layer, state.total_layers, OUTCOME_STOPPED
+        )
+        if grams is None:
+            return None
+
+        rate = self.settings.cost_per_gram
+        return MaterialSummary(
+            planned_grams=info.total_grams,
+            consumed_grams=grams,
+            consumed_cost=grams * rate if rate else None,
+            estimated=method == METHOD_LAYER_FRACTION,
+        )
 
     def _reset_slice_state(self) -> None:
         if self._slice_task is not None:

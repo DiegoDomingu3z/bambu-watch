@@ -10,6 +10,7 @@ from __future__ import annotations
 import contextlib
 import json
 import logging
+from dataclasses import dataclass
 
 import httpx2 as httpx
 
@@ -32,6 +33,22 @@ FAILURE_LABELS = {
 }
 
 
+@dataclass
+class MaterialSummary:
+    """Filament figures for an alert. `estimated` is True when consumed grams
+    came from a layer fraction rather than a measurement, and the rendered
+    line says so."""
+
+    planned_grams: float | None = None
+    consumed_grams: float | None = None
+    consumed_cost: float | None = None
+    estimated: bool = True
+
+    @property
+    def renderable(self) -> bool:
+        return self.consumed_grams is not None
+
+
 class DiscordNotifier:
     def __init__(self, settings: Settings, client: httpx.AsyncClient | None = None):
         self.settings = settings
@@ -39,7 +56,11 @@ class DiscordNotifier:
         self._owns_client = client is None
 
     @staticmethod
-    def format_message(analysis: FailureAnalysis, state: PrinterState) -> str:
+    def format_message(
+        analysis: FailureAnalysis,
+        state: PrinterState,
+        material: MaterialSummary | None = None,
+    ) -> str:
         label = FAILURE_LABELS.get(analysis.failure_type, analysis.failure_type)
         lines = ["**POSSIBLE PRINT FAILURE**", "", "Printer: P1S"]
         if state.file_name:
@@ -49,6 +70,18 @@ class DiscordNotifier:
         if state.layer is not None:
             total = f" / {state.total_layers}" if state.total_layers else ""
             lines.append(f"Layer: {state.layer}{total}")
+
+        if material is not None and material.renderable:
+            parts = [f"about {material.consumed_grams:.0f}g"]
+            if material.planned_grams is not None:
+                parts.append(f"of {material.planned_grams:.0f}g planned")
+            line = f"Material: {' '.join(parts)}"
+            if material.consumed_cost is not None:
+                line += f" (about {material.consumed_cost:.2f} USD"
+                line += ", estimated)" if material.estimated else ")"
+            elif material.estimated:
+                line += " (estimated)"
+            lines.append(line)
 
         lines += [
             "",
@@ -71,10 +104,11 @@ class DiscordNotifier:
         analysis: FailureAnalysis,
         frame: ImageFrame | None,
         state: PrinterState,
+        material: MaterialSummary | None = None,
     ) -> bool:
         """Returns True when Discord accepted the alert. Never raises: a
         failed notification is logged, not fatal."""
-        content = self.format_message(analysis, state)
+        content = self.format_message(analysis, state, material)
         client = self._client or httpx.AsyncClient(timeout=20.0)
 
         try:

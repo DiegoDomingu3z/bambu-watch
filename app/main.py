@@ -11,13 +11,28 @@ import sys
 from pydantic import ValidationError
 
 from app.bambu.camera import P1SCamera
+from app.bambu.ftp_client import BambuFtpClient
 from app.bambu.mqtt_client import BambuMqttClient
 from app.config import get_settings
 from app.detection.monitor import PrintMonitor
 from app.notifications.discord import DiscordNotifier
+from app.storage.database import connect
+from app.storage.prints import PrintRepository
 from app.vision.analyzer import VisionAnalyzer
 
 logger = logging.getLogger("bambu_watch")
+
+
+def build_repository(settings) -> PrintRepository | None:
+    """Print history is a convenience. Monitoring is the job, so a database
+    that cannot be opened is logged and skipped rather than fatal."""
+    try:
+        repository = PrintRepository(connect(settings.db_path), settings)
+        repository.reconcile_stale()
+        return repository
+    except Exception as exc:
+        logger.error("print history unavailable: %s", exc)
+        return None
 
 
 def build_monitor() -> PrintMonitor:
@@ -28,6 +43,8 @@ def build_monitor() -> PrintMonitor:
         camera=P1SCamera(settings),
         analyzer=VisionAnalyzer(settings),
         notifier=DiscordNotifier(settings),
+        repository=build_repository(settings),
+        ftp=BambuFtpClient(settings) if settings.enable_slice_fetch else None,
     )
 
 
@@ -40,6 +57,13 @@ async def run() -> None:
         settings.vision_model,
         settings.normal_interval,
         settings.frame_upload_width,
+    )
+    logger.info(
+        "filament %.4f USD/g (%.2f per %.0fg spool); slice fetch %s",
+        settings.cost_per_gram,
+        settings.spool_cost,
+        settings.spool_weight_g,
+        "enabled" if settings.enable_slice_fetch else "disabled",
     )
     logger.info("advisory only: this service never pauses the printer")
 

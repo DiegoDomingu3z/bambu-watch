@@ -39,3 +39,29 @@ def test_describe_config_error_reports_bad_values(monkeypatch, tmp_path):
     text = describe_config_error(caught.value)
     assert "normal_interval" in text
     assert ".env" in text
+
+
+def test_build_repository_returns_a_repository(monkeypatch, tmp_path):
+    from app.config import Settings
+    from app.main import build_repository
+
+    settings = Settings(bambu_host="h", bambu_serial="s", bambu_access_code="c",
+                        anthropic_api_key="k", discord_webhook_url="u",
+                        data_dir=tmp_path)
+    repo = build_repository(settings)
+    assert repo is not None
+    assert (tmp_path / "bambu_watch.db").exists()
+
+
+def test_build_repository_survives_an_unusable_path(tmp_path):
+    from app.config import Settings
+    from app.main import build_repository
+
+    blocker = tmp_path / "blocked"
+    blocker.write_text("i am a file, not a directory")
+    settings = Settings(bambu_host="h", bambu_serial="s", bambu_access_code="c",
+                        anthropic_api_key="k", discord_webhook_url="u",
+                        data_dir=blocker)
+    assert build_repository(settings) is None, (
+        "an unopenable database must not stop the service starting"
+    )

@@ -2,7 +2,7 @@ from datetime import UTC, datetime
 
 from app.bambu.models import ImageFrame, PrinterState
 from app.config import Settings
-from app.notifications.discord import DiscordNotifier
+from app.notifications.discord import DiscordNotifier, MaterialSummary
 from app.vision.schemas import FailureAnalysis
 
 WEBHOOK = "https://discord.com/api/webhooks/1/tok"
@@ -125,3 +125,74 @@ async def test_injected_client_is_not_closed():
     await n.send_failure(analysis(), None, state())
     await n.send_failure(analysis(), None, state())
     assert len(client.calls) == 2, "a reused client must survive the first send"
+
+
+# --- material lines ---
+
+def material(**over) -> MaterialSummary:
+    base = dict(planned_grams=340.0, consumed_grams=240.0,
+                consumed_cost=3.12, estimated=True)
+    base.update(over)
+    return MaterialSummary(**base)
+
+
+def test_message_includes_material_when_known():
+    text = DiscordNotifier.format_message(analysis(), state(), material())
+    assert "240" in text
+    assert "340" in text
+    assert "3.12" in text
+
+
+def test_estimated_material_says_so():
+    text = DiscordNotifier.format_message(analysis(), state(), material())
+    assert "estimated" in text.lower(), (
+        "a layer-fraction figure must never look measured"
+    )
+
+
+def test_exact_material_does_not_say_estimated():
+    text = DiscordNotifier.format_message(analysis(), state(),
+                                          material(estimated=False))
+    assert "estimated" not in text.lower()
+    assert "3.12" in text
+
+
+def test_message_omits_material_when_absent():
+    text = DiscordNotifier.format_message(analysis(), state(), None)
+    assert "Material" not in text
+    assert "0g" not in text, "unknown must never render as zero"
+
+
+def test_message_omits_material_when_grams_unknown():
+    text = DiscordNotifier.format_message(
+        analysis(), state(), material(consumed_grams=None, consumed_cost=None))
+    assert "Material" not in text
+
+
+def test_material_without_cost_still_renders_grams():
+    text = DiscordNotifier.format_message(
+        analysis(), state(), material(consumed_cost=None))
+    assert "240" in text
+    assert "estimated" in text.lower()
+
+
+def test_material_without_planned_total_still_renders():
+    text = DiscordNotifier.format_message(
+        analysis(), state(), material(planned_grams=None))
+    assert "240" in text
+    assert "planned" not in text
+
+
+async def test_send_passes_material_through():
+    client = StubClient()
+    n = DiscordNotifier(make_settings(), client=client)
+    assert await n.send_failure(analysis(), a_frame(), state(), material()) is True
+    body = client.calls[0][1]["data"]["payload_json"]
+    assert "240" in body
+    assert "estimated" in body.lower()
+
+
+async def test_send_without_material_still_works():
+    client = StubClient()
+    n = DiscordNotifier(make_settings(), client=client)
+    assert await n.send_failure(analysis(), a_frame(), state()) is True

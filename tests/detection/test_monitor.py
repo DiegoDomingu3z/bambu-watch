@@ -58,9 +58,11 @@ class StubAnalyzer:
 class StubNotifier:
     def __init__(self):
         self.sent = []
+        self.materials = []
 
-    async def send_failure(self, analysis, frame, state) -> bool:
+    async def send_failure(self, analysis, frame, state, material=None) -> bool:
         self.sent.append(analysis)
+        self.materials.append(material)
         return True
 
 
@@ -208,7 +210,7 @@ async def test_interval_resets_to_normal_on_new_session(tmp_path):
 
 async def test_notification_failure_does_not_raise(tmp_path):
     class Boom:
-        async def send_failure(self, analysis, frame, state):
+        async def send_failure(self, analysis, frame, state, material=None):
             raise RuntimeError("discord down")
 
     an = StubAnalyzer(result(), result(), result(), result())
@@ -229,3 +231,14 @@ async def test_inconclusive_analysis_records_but_does_not_alert(tmp_path):
         (m.session.directory / "detections.jsonl").read_text().strip().splitlines()[0]
     )
     assert row["status"] is None
+
+
+async def test_alert_passes_no_material_without_slice_info(tmp_path):
+    """With no FTPS client the alert still fires, just without figures."""
+    an = StubAnalyzer(result(), result(), result(), result())
+    note = StubNotifier()
+    m = build(tmp_path, StubPrinter(running_state()), StubCamera(), an, note)
+    for _ in range(4):
+        await m.run_once()
+    assert note.sent, "the alert must still fire"
+    assert note.materials[0] is None
