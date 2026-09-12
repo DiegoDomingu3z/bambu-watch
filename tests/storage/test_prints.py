@@ -181,3 +181,72 @@ def test_set_slice_source(repo):
 
 def test_get_unknown_print_returns_none(repo):
     assert repo.get("nope") is None
+
+
+# --- api cost and the finishing image ---
+
+def test_finalize_records_api_cost_and_its_rates(repo):
+    insert(repo)
+    finalize(repo, input_tokens=496_000, output_tokens=96_000)
+    row = repo.get("p1")
+    # 496k in at 2.0/MTok plus 96k out at 10.0/MTok
+    assert row["api_cost"] == pytest.approx(496_000 * 2.0 / 1e6 + 96_000 * 10.0 / 1e6)
+    assert row["api_cost"] == pytest.approx(1.952)
+    assert row["api_input_rate"] == pytest.approx(2.0)
+    assert row["api_output_rate"] == pytest.approx(10.0)
+
+
+def test_api_cost_follows_configured_rates(tmp_path):
+    s = make_settings(tmp_path, vision_input_cost_per_mtok=1.0,
+                      vision_output_cost_per_mtok=5.0)
+    r = PrintRepository(connect(s.db_path), s)
+    insert(r)
+    finalize(r, input_tokens=1_000_000, output_tokens=100_000)
+    row = r.get("p1")
+    assert row["api_cost"] == pytest.approx(1.0 + 0.5)
+    assert row["api_input_rate"] == pytest.approx(1.0)
+
+
+def test_api_cost_is_zero_when_no_tokens_were_spent(repo):
+    insert(repo)
+    finalize(repo, input_tokens=0, output_tokens=0)
+    assert repo.get("p1")["api_cost"] == pytest.approx(0.0)
+
+
+def test_total_cost_combines_filament_and_tokens(repo):
+    insert(repo)
+    finalize(repo, input_tokens=100_000, output_tokens=20_000)
+    row = repo.conn.execute(
+        "SELECT filament_cost, api_cost, total_cost FROM print_summary WHERE id='p1'"
+    ).fetchone()
+    assert row["filament_cost"] == pytest.approx(4.42)
+    assert row["api_cost"] == pytest.approx(0.4)
+    assert row["total_cost"] == pytest.approx(4.82)
+
+
+def test_save_final_frame_stores_blob_and_path(repo):
+    insert(repo)
+    repo.save_final_frame("p1", b"\xff\xd8body\xff\xd9", "data/sessions/x/frames/0042.jpg")
+    row = repo.get("p1")
+    assert row["final_frame_jpeg"] == b"\xff\xd8body\xff\xd9"
+    assert row["final_frame_path"].endswith("0042.jpg")
+    assert repo.final_frame("p1") == b"\xff\xd8body\xff\xd9"
+
+
+def test_save_final_frame_accepts_a_path_with_no_blob(repo):
+    insert(repo)
+    repo.save_final_frame("p1", None, "some/path.jpg")
+    row = repo.get("p1")
+    assert row["final_frame_jpeg"] is None
+    assert row["final_frame_path"] == "some/path.jpg"
+
+
+def test_final_frame_of_unknown_print_is_none(repo):
+    assert repo.final_frame("nope") is None
+
+
+def test_finalize_does_not_disturb_a_stored_image(repo):
+    insert(repo)
+    repo.save_final_frame("p1", b"\xff\xd8x\xff\xd9", "p.jpg")
+    finalize(repo)
+    assert repo.final_frame("p1") == b"\xff\xd8x\xff\xd9"

@@ -304,12 +304,45 @@ print_filaments    one row per filament slot
   filament_type, color, used_grams, used_meters
 ```
 
+Plus, on every print: `api_cost` with the `api_input_rate` and
+`api_output_rate` that produced it, and the finishing image as
+`final_frame_path` (full resolution, on disk) and `final_frame_jpeg` (a
+downscaled copy in the database).
+
 A row is inserted when monitoring starts, with `outcome = 'running'`, and
 updated at close. If the Pi loses power mid-print the print still has a
 record; a row still marked `running` at startup is reconciled to `unknown`.
 
 `cost_per_gram` is stored per row, so changing `SPOOL_COST` never rewrites
 what past prints cost.
+
+### For a dashboard
+
+`print_summary` is a view built for exactly this. It totals filament and
+token cost, reports whether an image exists, and **excludes the image blob**
+so selecting from it stays cheap:
+
+```sql
+SELECT file_name, outcome, duration_seconds,
+       filament_cost, api_cost, total_cost, has_image
+FROM print_summary
+ORDER BY started_at DESC;
+```
+
+Pull one image out when you actually want to render it:
+
+```bash
+sqlite3 data/bambu_watch.db \
+  "SELECT writefile('/tmp/last.jpg', final_frame_jpeg) FROM prints
+   WHERE final_frame_jpeg IS NOT NULL ORDER BY started_at DESC LIMIT 1;"
+```
+
+Two things stored per image, deliberately. `final_frame_path` points at the
+full-resolution frame on disk. `final_frame_jpeg` is a downscaled copy
+(`FINAL_FRAME_WIDTH`, default 640) held in the database, so a dashboard can
+render straight from one file with no filesystem join, and still works after
+session directories are pruned. At roughly 40KB per print, a thousand prints
+is about 40MB. Set `STORE_FINAL_FRAME=false` to keep only the path.
 
 ### Cost
 
@@ -357,14 +390,19 @@ FROM print_filaments
 GROUP BY color, filament_type
 ORDER BY grams DESC;
 
--- did the monitoring earn its keep? material saved by alerts
--- against tokens spent, per print
+-- did the monitoring earn its keep? what each print cost to watch
+-- against what its filament was worth
 SELECT file_name, outcome, alerts,
-       ROUND(consumed_cost, 2) AS filament_usd,
-       input_tokens + output_tokens AS tokens
-FROM prints
-WHERE alerts > 0
+       ROUND(filament_cost, 2) AS filament_usd,
+       ROUND(api_cost, 2)      AS watching_usd,
+       ROUND(total_cost, 2)    AS total_usd
+FROM print_summary
 ORDER BY started_at DESC;
+
+-- total spent on watching, all time
+SELECT ROUND(SUM(api_cost), 2) AS usd_on_tokens,
+       ROUND(SUM(filament_cost), 2) AS usd_on_filament
+FROM print_summary;
 ```
 
 ## Troubleshooting

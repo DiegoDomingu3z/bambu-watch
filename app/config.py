@@ -61,6 +61,8 @@ class Settings(BaseSettings):
     ftp_search_dirs: str = "/,/cache"
 
     # Storage
+    store_final_frame: bool = True
+    final_frame_width: int = 640
     data_dir: Path = Path("data")
     save_frames: bool = True
     max_session_frames: int = 2000

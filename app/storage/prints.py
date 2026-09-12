@@ -78,7 +78,11 @@ class PrintRepository:
         input_tokens: int,
         output_tokens: int,
     ) -> str:
-        row = self.get(print_id)
+        # Deliberately not self.get(): that is SELECT *, which would pull the
+        # image blob in order to read two scalars.
+        row = self.conn.execute(
+            "SELECT cost_per_gram, started_at FROM prints WHERE id = ?", (print_id,)
+        ).fetchone()
         rate = row["cost_per_gram"] if row else self.settings.cost_per_gram
         if rate is None:
             rate = self.settings.cost_per_gram
@@ -99,6 +103,10 @@ class PrintRepository:
         planned_cost = None if planned_grams is None else planned_grams * rate
         consumed_cost = None if consumed_grams is None else consumed_grams * rate
 
+        in_rate = self.settings.vision_input_cost_per_mtok
+        out_rate = self.settings.vision_output_cost_per_mtok
+        api_cost = (input_tokens * in_rate + output_tokens * out_rate) / 1e6
+
         self.conn.execute(
             """
             UPDATE prints SET
@@ -106,7 +114,8 @@ class PrintRepository:
                 progress_at_end = ?, layer_at_end = ?, total_layers = ?,
                 planned_grams = ?, planned_meters = ?, planned_cost = ?,
                 consumed_grams = ?, consumed_cost = ?, consumption_method = ?,
-                checks = ?, alerts = ?, input_tokens = ?, output_tokens = ?
+                checks = ?, alerts = ?, input_tokens = ?, output_tokens = ?,
+                api_cost = ?, api_input_rate = ?, api_output_rate = ?
             WHERE id = ?
             """,
             (
@@ -115,6 +124,7 @@ class PrintRepository:
                 planned_grams, planned_meters, planned_cost,
                 consumed_grams, consumed_cost, method,
                 checks, alerts, input_tokens, output_tokens,
+                api_cost, in_rate, out_rate,
                 print_id,
             ),
         )
@@ -133,6 +143,22 @@ class PrintRepository:
                 for r in rows
             ],
         )
+
+    def save_final_frame(
+        self, print_id: str, jpeg: bytes | None, path: str | None
+    ) -> None:
+        """Record how the print ended. The blob lets a dashboard render from
+        the database alone; the path points at the full-resolution original."""
+        self.conn.execute(
+            "UPDATE prints SET final_frame_jpeg = ?, final_frame_path = ? WHERE id = ?",
+            (jpeg, path, print_id),
+        )
+
+    def final_frame(self, print_id: str) -> bytes | None:
+        row = self.conn.execute(
+            "SELECT final_frame_jpeg FROM prints WHERE id = ?", (print_id,)
+        ).fetchone()
+        return row["final_frame_jpeg"] if row else None
 
     def set_slice_source(self, print_id: str, source: str) -> None:
         self.conn.execute(

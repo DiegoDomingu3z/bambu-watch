@@ -25,6 +25,7 @@ from app.storage.records import (
     determine_outcome,
 )
 from app.storage.session import PrintSession
+from app.vision.analyzer import downscale_jpeg
 
 logger = logging.getLogger(__name__)
 
@@ -250,6 +251,32 @@ class PrintMonitor:
                 state.file_name,
             )
 
+    def _store_final_frame(self, session) -> None:
+        """Persist a picture of how the print ended: a downscaled blob for
+        dashboards, plus the path to the full-resolution frame on disk."""
+        if not self.settings.store_final_frame or self.repository is None:
+            return
+
+        recent = self.buffer.latest(1)
+        if not recent:
+            return
+
+        jpeg = None
+        try:
+            jpeg = downscale_jpeg(recent[0].jpeg, self.settings.final_frame_width)
+        except Exception as exc:
+            logger.warning("could not downscale the final frame: %s", exc)
+
+        path = None
+        frames = sorted((session.directory / "frames").glob("*.jpg"))
+        if frames:
+            path = str(frames[-1])
+
+        try:
+            self.repository.save_final_frame(session.id, jpeg, path)
+        except Exception as exc:
+            logger.error("could not store the final frame: %s", exc)
+
     def _write_print_row(self, session, final_state, state) -> None:
         info = self.slice_info
         try:
@@ -277,6 +304,7 @@ class PrintMonitor:
                         for f in info.filaments
                     ],
                 )
+            self._store_final_frame(session)
             logger.info("recorded print %s as %s", session.id, outcome)
         except Exception as exc:
             # History is valuable but never worth ending a session over.
@@ -343,7 +371,6 @@ class PrintMonitor:
             monitoring_cost=monitoring_cost,
         )
 
-        # The last frame captured is a photo of how the print actually ended.
         recent = self.buffer.latest(1)
         frame = recent[0] if recent else None
 

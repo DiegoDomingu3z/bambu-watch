@@ -42,6 +42,12 @@ class StubNotifier:
     async def send_failure(self, *a, **kw):
         return True
 
+    async def send_print_started(self, event):
+        return True
+
+    async def send_print_finished(self, event, frame=None):
+        return True
+
 
 class StubFtp:
     def __init__(self, info=None, fail=False):
@@ -537,3 +543,118 @@ async def test_a_failing_notifier_does_not_end_the_session(tmp_path):
     assert await monitor.run_once() == "warmup"
     state.apply_report({"gcode_state": "FINISH", "mc_percent": 100})
     assert await monitor.run_once() == "idle"
+
+
+# --- api cost and finishing image, end to end ---
+
+def real_jpeg(width=1280, height=720) -> bytes:
+    import io
+
+    from PIL import Image
+    buf = io.BytesIO()
+    Image.new("RGB", (width, height), (20, 90, 160)).save(buf, format="JPEG")
+    return buf.getvalue()
+
+
+class PhotoCamera:
+    """Yields a decodable JPEG, so downscaling the final frame is exercised."""
+
+    async def capture(self):
+        return ImageFrame(timestamp=datetime.now(UTC), jpeg=real_jpeg())
+
+
+async def run_a_print(tmp_path, **over):
+    settings = make_settings(tmp_path, **over)
+    repo = PrintRepository(connect(settings.db_path), settings)
+    state = running()
+    monitor = PrintMonitor(settings, StubPrinter(state), PhotoCamera(),
+                           StubAnalyzer(), StubNotifier(), repository=repo)
+    for _ in range(4):
+        await monitor.run_once()
+    print_id = monitor.session.id
+    state.apply_report({"gcode_state": "FINISH", "mc_percent": 100, "layer_num": 100})
+    await monitor.run_once()
+    return repo, print_id
+
+
+async def test_print_records_what_the_tokens_cost(tmp_path):
+    repo, print_id = await run_a_print(tmp_path)
+    row = repo.get(print_id)
+    # StubAnalyzer reports 100 in / 20 out per analysed check.
+    expected = (row["input_tokens"] * 2.0 + row["output_tokens"] * 10.0) / 1e6
+    assert row["api_cost"] == pytest.approx(expected)
+    assert row["api_cost"] > 0
+    assert row["api_input_rate"] == pytest.approx(2.0)
+    assert row["api_output_rate"] == pytest.approx(10.0)
+
+
+async def test_print_records_a_finishing_image(tmp_path):
+    import io
+
+    from PIL import Image
+
+    repo, print_id = await run_a_print(tmp_path)
+    row = repo.get(print_id)
+
+    assert row["final_frame_jpeg"] is not None, "a dashboard needs the image"
+    with Image.open(io.BytesIO(row["final_frame_jpeg"])) as img:
+        assert img.size == (640, 360), "stored downscaled, not full resolution"
+
+    assert row["final_frame_path"] is not None
+    assert row["final_frame_path"].endswith(".jpg")
+    from pathlib import Path
+    assert Path(row["final_frame_path"]).exists(), "the path must point at a real file"
+
+
+async def test_stored_image_is_much_smaller_than_the_capture(tmp_path):
+    repo, print_id = await run_a_print(tmp_path)
+    stored = repo.get(print_id)["final_frame_jpeg"]
+    assert len(stored) < len(real_jpeg()), "the blob must not bloat the database"
+
+
+async def test_final_frame_can_be_switched_off(tmp_path):
+    repo, print_id = await run_a_print(tmp_path, store_final_frame=False)
+    row = repo.get(print_id)
+    assert row["final_frame_jpeg"] is None
+    assert row["final_frame_path"] is None
+
+
+async def test_final_frame_width_is_configurable(tmp_path):
+    import io
+
+    from PIL import Image
+    repo, print_id = await run_a_print(tmp_path, final_frame_width=320)
+    with Image.open(io.BytesIO(repo.get(print_id)["final_frame_jpeg"])) as img:
+        assert img.size == (320, 180)
+
+
+async def test_summary_view_is_dashboard_ready(tmp_path):
+    repo, print_id = await run_a_print(tmp_path)
+    row = repo.conn.execute(
+        "SELECT * FROM print_summary WHERE id = ?", (print_id,)
+    ).fetchone()
+    assert row["outcome"] == OUTCOME_COMPLETED
+    assert row["has_image"] == 1
+    assert row["total_cost"] is not None
+    assert row["api_cost"] > 0
+
+
+async def test_undecodable_frame_does_not_break_recording(tmp_path):
+    class BadCamera:
+        async def capture(self):
+            return ImageFrame(timestamp=datetime.now(UTC), jpeg=b"not a jpeg")
+
+    settings = make_settings(tmp_path)
+    repo = PrintRepository(connect(settings.db_path), settings)
+    state = running()
+    monitor = PrintMonitor(settings, StubPrinter(state), BadCamera(),
+                           StubAnalyzer(), StubNotifier(), repository=repo)
+    for _ in range(4):
+        await monitor.run_once()
+    print_id = monitor.session.id
+    state.apply_report({"gcode_state": "FINISH", "mc_percent": 100, "layer_num": 100})
+    await monitor.run_once()
+
+    row = repo.get(print_id)
+    assert row["outcome"] == OUTCOME_COMPLETED, "the print must still be recorded"
+    assert row["api_cost"] is not None

@@ -14,7 +14,7 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 SCHEMA_V1 = """
 CREATE TABLE IF NOT EXISTS prints (
@@ -59,6 +59,45 @@ CREATE TABLE IF NOT EXISTS print_filaments (
 """
 
 
+SCHEMA_V2 = """
+-- Money spent on vision tokens for this print, with the rates that produced
+-- it. Rates are snapshotted for the same reason cost_per_gram is: model
+-- pricing changes, and history should stay auditable.
+ALTER TABLE prints ADD COLUMN api_cost REAL;
+ALTER TABLE prints ADD COLUMN api_input_rate REAL;
+ALTER TABLE prints ADD COLUMN api_output_rate REAL;
+
+-- A picture of how the print ended. The path points at the full-resolution
+-- frame on disk; the blob is a downscaled copy so a dashboard can render
+-- from the database alone, with no filesystem join, and still work after
+-- session directories are pruned.
+ALTER TABLE prints ADD COLUMN final_frame_path TEXT;
+ALTER TABLE prints ADD COLUMN final_frame_jpeg BLOB;
+
+-- Convenience for dashboards: total cost of a print, filament plus tokens.
+-- Excludes the image blob so selecting from it stays cheap.
+CREATE VIEW IF NOT EXISTS print_summary AS
+SELECT
+    id, file_name, started_at, ended_at, outcome, duration_seconds,
+    layer_at_end, total_layers,
+    planned_grams, consumed_grams, consumption_method,
+    consumed_cost        AS filament_cost,
+    api_cost,
+    COALESCE(consumed_cost, 0) + COALESCE(api_cost, 0) AS total_cost,
+    checks, alerts, vision_model,
+    final_frame_path,
+    final_frame_jpeg IS NOT NULL AS has_image,
+    session_dir
+FROM prints;
+"""
+
+# Applied in order; each step raises user_version when it succeeds.
+MIGRATIONS: tuple[tuple[int, str], ...] = (
+    (1, SCHEMA_V1),
+    (2, SCHEMA_V2),
+)
+
+
 def connect(path: Path) -> sqlite3.Connection:
     path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(path), isolation_level=None)
@@ -71,10 +110,18 @@ def connect(path: Path) -> sqlite3.Connection:
 
 
 def migrate(conn: sqlite3.Connection) -> None:
+    """Bring an existing database up to SCHEMA_VERSION.
+
+    Steps run in order and are additive, so a v1 database keeps its rows.
+    """
     version = conn.execute("PRAGMA user_version").fetchone()[0]
     if version >= SCHEMA_VERSION:
         return
-    if version == 0:
-        conn.executescript(SCHEMA_V1)
-        conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
-        logger.info("initialised print history schema v%d", SCHEMA_VERSION)
+
+    for target, script in MIGRATIONS:
+        if version >= target:
+            continue
+        conn.executescript(script)
+        conn.execute(f"PRAGMA user_version = {target}")
+        logger.info("print history schema migrated to v%d", target)
+        version = target
