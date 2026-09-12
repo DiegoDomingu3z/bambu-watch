@@ -2,7 +2,12 @@ from datetime import UTC, datetime
 
 from app.bambu.models import ImageFrame, PrinterState
 from app.config import Settings
-from app.notifications.discord import DiscordNotifier, MaterialSummary
+from app.notifications.discord import (
+    DiscordNotifier,
+    MaterialSummary,
+    PrintFinished,
+    PrintStarted,
+)
 from app.vision.schemas import FailureAnalysis
 
 WEBHOOK = "https://discord.com/api/webhooks/1/tok"
@@ -196,3 +201,117 @@ async def test_send_without_material_still_works():
     client = StubClient()
     n = DiscordNotifier(make_settings(), client=client)
     assert await n.send_failure(analysis(), a_frame(), state()) is True
+
+
+# --- print start and finish notifications ---
+
+def test_started_message_has_the_essentials():
+    text = DiscordNotifier.format_started(PrintStarted(
+        file_name="01_Platform_AMS", total_layers=300,
+        planned_grams=340.0, planned_cost=4.42,
+        filaments=[("PLA", "#FF0000"), ("PLA", "#00FF00")]))
+    assert "PRINT STARTED" in text
+    assert "01_Platform_AMS" in text
+    assert "300" in text
+    assert "340g" in text
+    assert "4.42" in text
+    assert "#FF0000" in text and "#00FF00" in text
+    assert "never pauses" in text
+
+
+def test_started_message_without_material():
+    text = DiscordNotifier.format_started(PrintStarted(file_name="thing"))
+    assert "PRINT STARTED" in text
+    assert "thing" in text
+    assert "Material" not in text, "no figures means no material line"
+    assert "Colours" not in text
+
+
+def test_started_message_without_a_name():
+    text = DiscordNotifier.format_started(PrintStarted())
+    assert "unknown" in text
+
+
+def test_finished_message_for_a_completed_print():
+    text = DiscordNotifier.format_finished(PrintFinished(
+        file_name="01_Platform_AMS", outcome="completed",
+        duration_seconds=3 * 3600 + 42 * 60, layer_at_end=300, total_layers=300,
+        consumed_grams=340.0, consumed_cost=4.42, estimated=False,
+        checks=296, alerts=0, monitoring_cost=1.38))
+    assert "PRINT FINISHED" in text
+    assert "3h 42m" in text
+    assert "used" in text
+    assert "wasted" not in text
+    assert "340g" in text
+    assert "estimated" not in text.lower()
+    assert "296" in text
+    assert "1.38" in text
+
+
+def test_finished_message_for_a_stopped_print_says_wasted_and_estimated():
+    text = DiscordNotifier.format_finished(PrintFinished(
+        file_name="x", outcome="stopped", duration_seconds=1800,
+        consumed_grams=170.0, consumed_cost=2.21, estimated=True,
+        checks=40, alerts=1))
+    assert "PRINT STOPPED" in text
+    assert "wasted" in text
+    assert "estimated" in text.lower()
+    assert "30m" in text
+
+
+def test_finished_message_for_a_failed_print():
+    text = DiscordNotifier.format_finished(PrintFinished(outcome="failed"))
+    assert "PRINT FAILED" in text
+
+
+def test_finished_message_for_an_unknown_outcome():
+    text = DiscordNotifier.format_finished(PrintFinished(outcome="unknown"))
+    assert "PRINT ENDED" in text
+    assert "unknown" in text
+
+
+def test_finished_message_omits_unknown_figures():
+    text = DiscordNotifier.format_finished(PrintFinished(outcome="completed"))
+    assert "Material" not in text
+    assert "Duration" not in text
+    assert "Monitoring cost" not in text
+    assert "0g" not in text
+
+
+def test_duration_formats_minutes_only_under_an_hour():
+    text = DiscordNotifier.format_finished(
+        PrintFinished(outcome="completed", duration_seconds=125))
+    assert "2m" in text
+    assert "0h" not in text
+
+
+async def test_send_print_started_posts_text_only():
+    client = StubClient()
+    n = DiscordNotifier(make_settings(), client=client)
+    assert await n.send_print_started(PrintStarted(file_name="x")) is True
+    _, kwargs = client.calls[0]
+    assert "json" in kwargs
+    assert "files" not in kwargs
+
+
+async def test_send_print_finished_attaches_the_frame():
+    client = StubClient()
+    n = DiscordNotifier(make_settings(), client=client)
+    ok = await n.send_print_finished(
+        PrintFinished(outcome="completed"), a_frame())
+    assert ok is True
+    _, kwargs = client.calls[0]
+    assert kwargs["files"]["file"][0] == "finished.jpg"
+
+
+async def test_send_print_finished_without_a_frame():
+    client = StubClient()
+    n = DiscordNotifier(make_settings(), client=client)
+    assert await n.send_print_finished(PrintFinished(outcome="completed")) is True
+    assert "files" not in client.calls[0][1]
+
+
+async def test_start_and_finish_survive_a_network_failure():
+    n = DiscordNotifier(make_settings(), client=StubClient(boom=True))
+    assert await n.send_print_started(PrintStarted()) is False
+    assert await n.send_print_finished(PrintFinished()) is False

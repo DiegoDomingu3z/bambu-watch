@@ -16,9 +16,14 @@ from app.bambu.slice_info import SliceInfo
 from app.config import Settings
 from app.detection.confirmation import FailureDetector
 from app.detection.history import SnapshotBuffer
-from app.notifications.discord import MaterialSummary
+from app.notifications.discord import MaterialSummary, PrintFinished, PrintStarted
 from app.storage.prints import FilamentRow
-from app.storage.records import METHOD_LAYER_FRACTION, OUTCOME_STOPPED, compute_consumption
+from app.storage.records import (
+    METHOD_LAYER_FRACTION,
+    OUTCOME_STOPPED,
+    compute_consumption,
+    determine_outcome,
+)
 from app.storage.session import PrintSession
 
 logger = logging.getLogger(__name__)
@@ -98,6 +103,7 @@ class PrintMonitor:
 
         if self.session is None:
             self._start_session(state)
+            await self._notify_started(state)
 
         try:
             frame = await self.camera.capture()
@@ -182,6 +188,7 @@ class PrintMonitor:
             session.total_output_tokens,
         )
         session.close(final_state)
+        await self._notify_finished(session, final_state, state)
 
         if self.repository is not None:
             self._write_print_row(session, final_state, state)
@@ -274,6 +281,76 @@ class PrintMonitor:
         except Exception as exc:
             # History is valuable but never worth ending a session over.
             logger.error("could not record print history: %s", exc)
+
+    async def _notify_started(self, state: PrinterState) -> None:
+        if not self.settings.notify_on_start:
+            return
+        info = self.slice_info
+        grams = info.total_grams if info else None
+        rate = self.settings.cost_per_gram
+        event = PrintStarted(
+            file_name=state.file_name,
+            total_layers=state.total_layers,
+            planned_grams=grams,
+            planned_cost=grams * rate if grams is not None and rate else None,
+            filaments=[
+                (f.filament_type, f.color) for f in (info.filaments if info else [])
+            ],
+        )
+        try:
+            await self.notifier.send_print_started(event)
+        except Exception as exc:
+            logger.error("could not send start notification: %s", exc)
+
+    async def _notify_finished(
+        self, session, final_state: str | None, state: PrinterState
+    ) -> None:
+        if not self.settings.notify_on_finish:
+            return
+
+        outcome = determine_outcome(final_state, state.progress)
+        info = self.slice_info
+        grams, method = compute_consumption(
+            info.total_grams if info else None,
+            state.layer,
+            state.total_layers,
+            outcome,
+        )
+        rate = self.settings.cost_per_gram
+        duration = int(
+            (datetime.now(UTC) - session.started_at).total_seconds()
+        )
+
+        monitoring_cost = None
+        rin = self.settings.vision_input_cost_per_mtok
+        rout = self.settings.vision_output_cost_per_mtok
+        if rin or rout:
+            monitoring_cost = (
+                session.total_input_tokens * rin + session.total_output_tokens * rout
+            ) / 1e6
+
+        event = PrintFinished(
+            file_name=session.file_name,
+            outcome=outcome,
+            duration_seconds=duration,
+            layer_at_end=state.layer,
+            total_layers=state.total_layers,
+            consumed_grams=grams,
+            consumed_cost=grams * rate if grams is not None and rate else None,
+            estimated=method == METHOD_LAYER_FRACTION,
+            checks=session.checks,
+            alerts=session.alerts,
+            monitoring_cost=monitoring_cost,
+        )
+
+        # The last frame captured is a photo of how the print actually ended.
+        recent = self.buffer.latest(1)
+        frame = recent[0] if recent else None
+
+        try:
+            await self.notifier.send_print_finished(event, frame)
+        except Exception as exc:
+            logger.error("could not send finish notification: %s", exc)
 
     def _material_summary(self, state: PrinterState) -> MaterialSummary | None:
         """What the print would have consumed if abandoned now. This is the

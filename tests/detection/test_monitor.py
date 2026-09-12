@@ -59,6 +59,16 @@ class StubNotifier:
     def __init__(self):
         self.sent = []
         self.materials = []
+        self.started = []
+        self.finished = []
+
+    async def send_print_started(self, event) -> bool:
+        self.started.append(event)
+        return True
+
+    async def send_print_finished(self, event, frame=None) -> bool:
+        self.finished.append(event)
+        return True
 
     async def send_failure(self, analysis, frame, state, material=None) -> bool:
         self.sent.append(analysis)

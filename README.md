@@ -183,6 +183,52 @@ jq -r 'select(.status == "failure") | .confidence' \
 Once you have enough prints, that data is what tells you whether to adjust
 `CONFIRMATION_THRESHOLD`, and whether automatic pausing would ever be safe.
 
+## Notifications
+
+Three kinds, all over the same webhook:
+
+| Event | API cost | Attachment |
+|---|---|---|
+| Print started | none | none |
+| Possible failure detected | one vision call | the triggering frame |
+| Print finished, stopped or failed | none | the last frame captured |
+
+Start and finish messages cost nothing in API spend; they are webhook POSTs
+built from data the service already has. Turn either off with
+`NOTIFY_ON_START=false` / `NOTIFY_ON_FINISH=false`.
+
+```
+PRINT STARTED
+
+Print: 01_Platform_AMS
+Layers: 300
+Material: 340g planned, 4.42 USD
+Colours: PLA #FF0000, PLA #00FF00
+
+AI monitoring active. This service never pauses the printer.
+```
+
+```
+PRINT STOPPED
+
+Print: 02_Mini_Modular_Display_P1S
+Outcome: stopped
+Duration: 52m
+Layer: 118 / 300
+Material wasted: 134g (1.74 USD, estimated)
+Checks: 35  Alerts: 1
+Monitoring cost: 0.16 USD
+```
+
+A completed print says "used" rather than "wasted" and omits "estimated",
+since a finished print consumed its whole estimate. Material lines are absent
+entirely when the sliced file was never fetched - never shown as zero.
+
+`Monitoring cost` is computed from recorded tokens at
+`VISION_INPUT_COST_PER_MTOK` / `VISION_OUTPUT_COST_PER_MTOK`, which default to
+claude-sonnet-5 rates. **Update them if you change `VISION_MODEL`**, or the
+figure will be wrong.
+
 ## Print history
 
 Every print is recorded in a SQLite database at `data/bambu_watch.db`: name,

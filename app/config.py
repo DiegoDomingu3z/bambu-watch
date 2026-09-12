@@ -31,6 +31,13 @@ class Settings(BaseSettings):
     # Notifications
     discord_webhook_url: str
     printer_label: str = "P1S"
+    notify_on_start: bool = True
+    notify_on_finish: bool = True
+
+    # Rates used only to display monitoring spend in the finish notification.
+    # Update these if you change VISION_MODEL; defaults are claude-sonnet-5.
+    vision_input_cost_per_mtok: float = 2.0
+    vision_output_cost_per_mtok: float = 10.0
 
     # Detection policy
     normal_interval: int = 45
