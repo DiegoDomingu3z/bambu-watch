@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -14,7 +14,7 @@ from app.storage.records import (
     OUTCOME_UNKNOWN,
 )
 
-START = datetime(2026, 9, 12, 10, 0, tzinfo=timezone.utc)
+START = datetime(2026, 9, 12, 10, 0, tzinfo=UTC)
 
 
 def make_settings(tmp_path, **over) -> Settings:
