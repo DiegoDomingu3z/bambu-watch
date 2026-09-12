@@ -102,6 +102,51 @@ MQTT client reconnects on its own when the network or the printer drops.
 docker compose logs -f
 ```
 
+## Deploying to a Raspberry Pi
+
+**Use 64-bit Raspberry Pi OS.** The container is verified on `linux/arm64`
+(`aarch64`), which is what a 64-bit install runs. On 32-bit (`armv7l`) Pillow
+has no prebuilt wheel and will try to compile from source, which needs build
+dependencies and takes a long time.
+
+A Pi 4 or 5 is comfortable. A Pi 3 works but builds slowly.
+
+Check the Pi first:
+
+```bash
+uname -m && (docker --version || echo "docker not installed")
+```
+
+Install Docker if needed, then log out and back in so the group applies:
+
+```bash
+curl -fsSL https://get.docker.com | sh && sudo usermod -aG docker "$USER"
+```
+
+Copy the project across from your workstation. `.env` is gitignored, so it
+does not arrive through git and must either be copied deliberately or written
+on the Pi:
+
+```bash
+rsync -av --exclude '.venv' --exclude '__pycache__' --exclude '.pytest_cache' \
+  --exclude '.ruff_cache' --exclude 'data/sessions' --exclude '*.db*' \
+  ~/codevault/bambu-watch/ pi@raspberrypi.local:~/bambu-watch/
+```
+
+Confirm the Pi can actually see the printer, since it must be on the same
+network:
+
+```bash
+nc -zv "$BAMBU_HOST" 8883 && nc -zv "$BAMBU_HOST" 6000 && nc -zv "$BAMBU_HOST" 990
+```
+
+Then build and start. `restart: unless-stopped` brings it back after a
+reboot, so no systemd unit is needed:
+
+```bash
+cd ~/bambu-watch && docker compose up -d --build
+```
+
 ## Configuration
 
 Every value below is an environment variable in `.env`. Defaults are what ship.
