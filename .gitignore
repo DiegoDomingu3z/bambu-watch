@@ -14,9 +14,13 @@ venv/
 .coverage
 htmlcov/
 
-# Captured session data and probe output
+# Captured session data, the print history database, and probe output.
+# All runtime state: never committed.
 data/sessions/*
 !data/sessions/.gitkeep
+data/*.db
+data/*.db-shm
+data/*.db-wal
 fixtures/live/
 
 # OS
