@@ -1,0 +1,11 @@
+services:
+  bambu-watch:
+    build: .
+    container_name: bambu-watch
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
+    # No ports published. The service makes only outbound connections:
+    # the printer on the LAN, the Claude API, and Discord.

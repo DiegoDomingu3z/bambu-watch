@@ -6,6 +6,9 @@ import asyncio
 import contextlib
 import logging
 import signal
+import sys
+
+from pydantic import ValidationError
 
 from app.bambu.camera import P1SCamera
 from app.bambu.mqtt_client import BambuMqttClient
@@ -53,11 +56,48 @@ async def run() -> None:
         logger.info("shutting down")
 
 
+def describe_config_error(exc: ValidationError) -> str:
+    """Turn a pydantic validation failure into something a person reading
+    `docker compose logs` can act on."""
+    missing = sorted(
+        str(err["loc"][0]).upper()
+        for err in exc.errors()
+        if err.get("type") == "missing" and err.get("loc")
+    )
+    other = [
+        f"{'.'.join(str(p) for p in err.get('loc', ()))}: {err.get('msg')}"
+        for err in exc.errors()
+        if err.get("type") != "missing"
+    ]
+
+    lines = ["Configuration error: bambu-watch cannot start."]
+    if missing:
+        lines.append("")
+        lines.append("These required settings are not set:")
+        lines += [f"  {name}" for name in missing]
+    for problem in other:
+        lines.append(f"  {problem}")
+    lines += [
+        "",
+        "Copy .env.example to .env and fill it in. Under Docker, make sure",
+        "the compose file's env_file points at that .env.",
+    ]
+    return "\n".join(lines)
+
+
 def main() -> None:
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)-7s %(name)s: %(message)s",
     )
+    try:
+        get_settings()
+    except ValidationError as exc:
+        # Exit cleanly rather than crash-looping under restart:
+        # unless-stopped, and say what is actually missing.
+        print(describe_config_error(exc), file=sys.stderr)
+        raise SystemExit(1) from None
+
     asyncio.run(run())
 
 
