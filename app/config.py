@@ -41,6 +41,18 @@ class Settings(BaseSettings):
     alert_cooldown_minutes: int = 15
     frame_history: int = 3
 
+    # Filament cost. Two settings rather than a per-gram constant so a
+    # different spool size or price needs no code change.
+    spool_cost: float = 13.0
+    spool_weight_g: float = 1000.0
+
+    # Sliced-file fetch over FTPS. Read-only, and never while printing.
+    enable_slice_fetch: bool = True
+    bambu_ftp_port: int = 990
+    ftp_timeout_seconds: float = 30.0
+    ftp_max_fetch_bytes: int = 33554432  # 32MB
+    ftp_search_dirs: str = "/,/cache"
+
     # Storage
     data_dir: Path = Path("data")
     save_frames: bool = True
@@ -49,6 +61,20 @@ class Settings(BaseSettings):
     @property
     def sessions_dir(self) -> Path:
         return self.data_dir / "sessions"
+
+    @property
+    def db_path(self) -> Path:
+        return self.data_dir / "bambu_watch.db"
+
+    @property
+    def cost_per_gram(self) -> float:
+        if self.spool_weight_g <= 0:
+            return 0.0
+        return self.spool_cost / self.spool_weight_g
+
+    @property
+    def ftp_dirs(self) -> list[str]:
+        return [d.strip() for d in self.ftp_search_dirs.split(",") if d.strip()]
 
 
 @lru_cache(maxsize=1)
