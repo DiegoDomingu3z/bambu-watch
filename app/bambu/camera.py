@@ -11,9 +11,10 @@ scripts/probe_printer.py against real hardware.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import ssl
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Protocol
 
 from app.bambu.models import ImageFrame
@@ -80,7 +81,7 @@ class P1SCamera:
 
     async def capture(self) -> ImageFrame:
         jpeg = await asyncio.wait_for(self._capture_once(), timeout=self.timeout)
-        return ImageFrame(timestamp=datetime.now(timezone.utc), jpeg=jpeg)
+        return ImageFrame(timestamp=datetime.now(UTC), jpeg=jpeg)
 
     async def _capture_once(self) -> bytes:
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
@@ -96,7 +97,7 @@ class P1SCamera:
             return await read_frame(reader)
         finally:
             writer.close()
-            try:
+            # Best effort: the frame is already read, so a close error is
+            # not worth propagating.
+            with contextlib.suppress(Exception):
                 await writer.wait_closed()
-            except Exception:
-                pass

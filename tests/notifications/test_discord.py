@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from app.bambu.models import ImageFrame, PrinterState
 from app.config import Settings
@@ -29,7 +29,7 @@ def state() -> PrinterState:
 
 
 def a_frame() -> ImageFrame:
-    return ImageFrame(timestamp=datetime(2026, 9, 12, tzinfo=timezone.utc),
+    return ImageFrame(timestamp=datetime(2026, 9, 12, tzinfo=UTC),
                       jpeg=b"\xff\xd8x\xff\xd9")
 
 

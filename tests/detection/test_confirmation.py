@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -27,7 +27,7 @@ def analysis(status="failure", confidence=0.9, failure_type="spaghetti",
 
 class Clock:
     def __init__(self):
-        self.t = datetime(2026, 9, 12, 10, 0, 0, tzinfo=timezone.utc)
+        self.t = datetime(2026, 9, 12, 10, 0, 0, tzinfo=UTC)
 
     def __call__(self) -> datetime:
         return self.t

@@ -12,7 +12,7 @@ import logging
 import re
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from app.bambu.models import ImageFrame
@@ -93,7 +93,7 @@ class PrintSession:
             self.alerts += 1
 
         row = {
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
             "session_id": self.id,
             "status": analysis.status if analysis else None,
             "confidence": analysis.confidence if analysis else None,
@@ -116,7 +116,7 @@ class PrintSession:
             logger.warning("could not append detection: %s", exc)
 
     def close(self, final_state: str | None) -> None:
-        self._write_metadata(final_state=final_state, ended_at=datetime.now(timezone.utc))
+        self._write_metadata(final_state=final_state, ended_at=datetime.now(UTC))
 
     def _write_metadata(self, final_state: str | None, ended_at: datetime | None) -> None:
         meta = {

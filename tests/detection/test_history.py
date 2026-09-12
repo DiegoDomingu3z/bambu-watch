@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -8,7 +8,7 @@ from app.detection.history import SnapshotBuffer
 
 def frame(i: int) -> ImageFrame:
     return ImageFrame(
-        timestamp=datetime(2026, 9, 12, tzinfo=timezone.utc) + timedelta(seconds=i),
+        timestamp=datetime(2026, 9, 12, tzinfo=UTC) + timedelta(seconds=i),
         jpeg=bytes([i]),
     )
 

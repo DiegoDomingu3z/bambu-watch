@@ -1,5 +1,5 @@
 import io
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from PIL import Image
@@ -25,7 +25,7 @@ def jpeg_of(width: int, height: int) -> bytes:
 
 
 def frames(n=3) -> list[ImageFrame]:
-    t0 = datetime(2026, 9, 12, 10, 0, 0, tzinfo=timezone.utc)
+    t0 = datetime(2026, 9, 12, 10, 0, 0, tzinfo=UTC)
     return [ImageFrame(timestamp=t0 + timedelta(seconds=45 * i), jpeg=jpeg_of(1280, 720))
             for i in range(n)]
 

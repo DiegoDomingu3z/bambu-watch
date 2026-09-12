@@ -23,6 +23,19 @@ asyncio_mode = "auto"
 line-length = 100
 target-version = "py312"
 
+[tool.ruff.lint]
+# Explicit rather than relying on ruff's default, which widens between
+# versions. BLE001/S110 are deliberately not selected: this is a monitoring
+# daemon whose design requires that no network edge can kill the loop, so the
+# broad excepts in the camera, MQTT, vision, notifier and monitor layers are
+# intentional and documented in the design spec.
+select = ["E", "F", "W", "I", "UP", "B", "C4", "SIM", "ISC", "RUF"]
+
+[tool.ruff.lint.per-file-ignores]
+# dict(...) with keyword args reads better than a literal in the settings
+# helpers that every test module uses.
+"tests/**" = ["C408"]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"

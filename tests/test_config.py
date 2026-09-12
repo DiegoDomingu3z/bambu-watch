@@ -1,4 +1,5 @@
 import pytest
+from pydantic import ValidationError
 
 from app.config import Settings
 
@@ -41,7 +42,7 @@ def test_missing_required_secret_raises(monkeypatch, tmp_path):
     for k in REQUIRED:
         monkeypatch.delenv(k, raising=False)
     monkeypatch.chdir(tmp_path)
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         Settings()
 
 

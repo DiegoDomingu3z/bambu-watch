@@ -1,5 +1,5 @@
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from app.bambu.models import ImageFrame
 from app.config import Settings
@@ -8,7 +8,7 @@ from app.storage.session import PrintSession
 from app.vision.analyzer import AnalysisResult
 from app.vision.schemas import FailureAnalysis
 
-STARTED = datetime(2026, 9, 12, 10, 0, tzinfo=timezone.utc)
+STARTED = datetime(2026, 9, 12, 10, 0, tzinfo=UTC)
 
 
 def make_settings(tmp_path, **over) -> Settings:

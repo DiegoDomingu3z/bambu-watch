@@ -7,6 +7,7 @@ webhook rather than a bot because nothing needs to be received.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 
@@ -58,8 +59,10 @@ class DiscordNotifier:
             "Observation:",
             analysis.explanation,
             "",
-            "Check Bambu Handy before continuing. This service does not pause "
-            "the printer.",
+            (
+                "Check Bambu Handy before continuing. "
+                "This service does not pause the printer."
+            ),
         ]
         return "\n".join(lines)
 
@@ -90,10 +93,8 @@ class DiscordNotifier:
             return False
         finally:
             if self._owns_client:
-                try:
+                with contextlib.suppress(Exception):
                     await client.aclose()
-                except Exception:
-                    pass
 
         if response.status_code >= 300:
             logger.error(

@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from app.bambu.models import ImageFrame, PrinterState
 
@@ -65,5 +65,5 @@ def test_non_numeric_values_become_none_not_crash():
 
 
 def test_image_frame_holds_bytes():
-    f = ImageFrame(timestamp=datetime.now(timezone.utc), jpeg=b"\xff\xd8\xff\xd9")
+    f = ImageFrame(timestamp=datetime.now(UTC), jpeg=b"\xff\xd8\xff\xd9")
     assert f.jpeg.startswith(b"\xff\xd8")
